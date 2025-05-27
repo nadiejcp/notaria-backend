@@ -242,7 +242,7 @@ async def updateInfoUsuario(request: Request, id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el formato JSON: {e}")
 
-host='127.0.0.1'
+host='0.0.0.0'
 port=8000
 uvicorn.run(app, host=host, port=port, reload=False)
 
