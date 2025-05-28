@@ -7,7 +7,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware, 
-    allow_origins=["https://www.plusnotary.net", "http://localhost:3000"],
+    allow_origins=["https://www.plusnotary.net", "http://localhost:3000", "https://notaria-next-js.vercel.app"],
     allow_credentials=True, allow_methods=['*'], 
     allow_headers=['*'],
 )
@@ -31,7 +31,7 @@ def close(cursor, conn):
 def retrieveInfo(data):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT nombres, apellidos, identificacion FROM users WHERE id = ?', (data,)) 
+    cursor.execute('SELECT nombres, apellidos, identificacion FROM users WHERE id = %s', (data,)) 
     info = cursor.fetchone()
     close(cursor, conn)
     return info
@@ -63,10 +63,11 @@ def getFileData(code: str):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga, id FROM files WHERE codigo = ?', (code,)) 
+        cursor.execute('SELECT estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga, id FROM files WHERE codigo = %s', (code,)) 
+        print(code)
         record = cursor.fetchone()
         if record is not None:
-            cursor.execute('SELECT emisor_id, receptor_id FROM follows WHERE file_id = ?', (record[5],)) 
+            cursor.execute('SELECT emisor_id, receptor_id FROM follows WHERE file_id = %s', (record[5],)) 
             files = cursor.fetchall()
             emisores = []
             receptores = []
@@ -92,7 +93,7 @@ async def getUserData(request: Request, id: str):
     if(await validateRequest(request)):
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE identificacion = ?', (id,)) 
+        cursor.execute('SELECT * FROM users WHERE identificacion = %s', (id,)) 
         record = cursor.fetchone()
         if record:
             close(cursor, conn)
@@ -127,7 +128,7 @@ async def saveInfoUsuario(request: Request):
         cursor = conn.cursor()
         cursor.execute(f'SELECT id FROM users WHERE identificacion = {json_data.get('identificacion')} AND nacionalidad = {json_data.get("nacionalidad")}')
         if (cursor.fetchone() is None):
-            cursor.execute('INSERT INTO users (nombres, apellidos, fechaNacimiento, nacionalidad, identificacion) VALUES (?, ?, ?, ?, ?)', 
+            cursor.execute('INSERT INTO users (nombres, apellidos, fechaNacimiento, nacionalidad, identificacion) VALUES (%s, %s, %s, %s, %s)', 
                         (json_data.get('nombres'), json_data.get('apellidos'), json_data.get('fechaNacimiento'),
                             json_data.get('nacionalidad'), json_data.get('identificacion'),))
             conn.commit()
@@ -148,26 +149,26 @@ async def saveInfoFile(request: Request):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id FROM files WHERE codigo = ?', (json_data.get('code'),))
+        cursor.execute('SELECT id FROM files WHERE codigo = %s', (json_data.get('code'),))
         record = cursor.fetchone()
         if record is None:
             emisores = json_data.get('emisor').split(',')
             receptores = json_data.get('receptor').split(',')
-            cursor.execute('INSERT INTO files (estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga) VALUES (?, ?, ?, ?, ?) RETURNING id', 
+            cursor.execute('INSERT INTO files (estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga) VALUES (%s, %s, %s, %s, %s) RETURNING id', 
                         (json_data.get('estado'), json_data.get('code'), json_data.get('fechaEmision'),
                             json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'),))
             id = cursor.fetchone()[0]
             for e in emisores:
-                cursor.execute(f'SELECT id FROM users WHERE identificacion = ?', (e.strip(), ))
+                cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (e.strip(), ))
                 emisor = cursor.fetchone()
                 if emisor is None:
                     raise HTTPException(status_code=403, detail=f"Emisor con identificacion {e.strip()} no existe en la base de datos")      
                 for receptor in receptores:
-                    cursor.execute(f'SELECT id FROM users WHERE identificacion = ?', (receptor.strip(), ))
+                    cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ))
                     receptorId = cursor.fetchone()
                     if receptorId is None:
                         raise HTTPException(status_code=403, detail=f"Receptor con identificacion {receptor.strip()} no existe en la base de datos") 
-                    cursor.execute('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (?, ?, ?)',
+                    cursor.execute('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)',
                                    (emisor[0], receptorId[0], id,))            
             conn.commit()
             close(cursor, conn)
@@ -187,25 +188,25 @@ async def updateInfoFile(request: Request, id: str):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(f'SELECT id FROM files WHERE id = ?', (id, )) 
+        cursor.execute(f'SELECT id FROM files WHERE id = %s', (id, )) 
         if cursor.fetchone() is not None:       
             emisores = json_data.get('emisor').split(',')
             receptores = json_data.get('receptor').split(',')
-            cursor.execute("""UPDATE files SET estado = ?, codigo = ?, fechaEmision = ?, 
-                           fechaCaducidad = ?, enlaceDescarga = ? WHERE id = ?""", 
+            cursor.execute("""UPDATE files SET estado = %s, codigo = %s, fechaEmision = %s, 
+                           fechaCaducidad = %s, enlaceDescarga = %s WHERE id = %s""", 
                            (json_data.get('estado'), json_data.get('code'), json_data.get('fechaEmision'),
                             json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'), id, ))
             for e in emisores:
-                cursor.execute(f'SELECT id FROM users WHERE identificacion = ?', (e.strip(), ))
+                cursor.execute('SELECT id FROM users WHERE identificacion = %s', (e.strip(), ))
                 emisor = cursor.fetchone()
                 if emisor is None:
                     raise HTTPException(status_code=403, detail=f"Emisor con identificacion {e.strip()} no existe en la base de datos")      
                 for receptor in receptores:
-                    cursor.execute(f'SELECT id FROM users WHERE identificacion = ?', (receptor.strip(), ))
+                    cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ))
                     receptorId = cursor.fetchone()
                     if receptorId is None:
                         raise HTTPException(status_code=403, detail=f"Receptor con identificacion {receptor.strip()} no existe en la base de datos") 
-                    cursor.execute('UPDATE follows SET emisor_id = ?, receptor_id = ? WHERE file_id = ?',
+                    cursor.execute('UPDATE follows SET emisor_id = %s, receptor_id = %s WHERE file_id = %s',
                                    (emisor[0], receptorId[0], id,))         
             conn.commit()
             close(cursor, conn)
@@ -225,11 +226,11 @@ async def updateInfoUsuario(request: Request, id: str):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id FROM users WHERE id = ?', (id, ))
+        cursor.execute('SELECT id FROM users WHERE id = %s', (id, ))
         record = cursor.fetchone()
         if (record is not None):
-            cursor.execute("""UPDATE users SET nombres = ?, apellidos = ?, fechaNacimiento = ?, 
-                           nacionalidad = ?, identificacion = ? WHERE id = ?""", 
+            cursor.execute("""UPDATE users SET nombres = %s, apellidos = %s, fechaNacimiento = %s, 
+                           nacionalidad = %s, identificacion = %s WHERE id = %s""", 
                            (json_data.get('nombres'), json_data.get('apellidos'), json_data.get('fechaNacimiento'),
                             json_data.get('nacionalidad'), json_data.get('identificacion'), id))
             conn.commit()
