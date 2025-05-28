@@ -64,7 +64,6 @@ def getFileData(code: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga, id FROM files WHERE codigo = %s', (code,)) 
-        print(code)
         record = cursor.fetchone()
         if record is not None:
             cursor.execute('SELECT emisor_id, receptor_id FROM follows WHERE file_id = %s', (record[5],)) 
@@ -192,6 +191,7 @@ async def updateInfoFile(request: Request, id: str):
         if cursor.fetchone() is not None:       
             emisores = json_data.get('emisor').split(',')
             receptores = json_data.get('receptor').split(',')
+            cursor.execute('DELETE FROM follows WHERE file_id = %s', (id,))
             cursor.execute("""UPDATE files SET estado = %s, codigo = %s, fechaEmision = %s, 
                            fechaCaducidad = %s, enlaceDescarga = %s WHERE id = %s""", 
                            (json_data.get('estado'), json_data.get('code'), json_data.get('fechaEmision'),
@@ -199,6 +199,7 @@ async def updateInfoFile(request: Request, id: str):
             for e in emisores:
                 cursor.execute('SELECT id FROM users WHERE identificacion = %s', (e.strip(), ))
                 emisor = cursor.fetchone()
+                print(emisor)
                 if emisor is None:
                     raise HTTPException(status_code=403, detail=f"Emisor con identificacion {e.strip()} no existe en la base de datos")      
                 for receptor in receptores:
@@ -206,7 +207,7 @@ async def updateInfoFile(request: Request, id: str):
                     receptorId = cursor.fetchone()
                     if receptorId is None:
                         raise HTTPException(status_code=403, detail=f"Receptor con identificacion {receptor.strip()} no existe en la base de datos") 
-                    cursor.execute('UPDATE follows SET emisor_id = %s, receptor_id = %s WHERE file_id = %s',
+                    cursor.execute('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)',
                                    (emisor[0], receptorId[0], id,))         
             conn.commit()
             close(cursor, conn)
@@ -243,7 +244,7 @@ async def updateInfoUsuario(request: Request, id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el formato JSON: {e}")
 
-host='0.0.0.0'
+host='127.0.0.1'
 port=8000
 uvicorn.run(app, host=host, port=port, reload=False)
 
