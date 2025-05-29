@@ -12,7 +12,7 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-def get_db_connection():
+def get_db_connection(query, params, commit, one):
     conn = connector.connect(
         host='database-plus-notary.cj4g6ckwk9a3.us-east-2.rds.amazonaws.com',        # or your MySQL server IP
         user="admin",    # replace with your MySQL username
@@ -20,21 +20,21 @@ def get_db_connection():
         database="database_notary",     # replace with your database name
         port=3306  # default MySQL port
     )
-    return conn
-
-def close(cursor, conn):
-    if cursor is not None:
-        cursor.close()
-    if conn is not None:
-        conn.close()
+    cursor = conn.cursor(buffered=True)
+    cursor.execute(query, params)
+    answer = False
+    if commit:
+        conn.commit()
+    elif one:
+        answer= cursor.fetchone()
+    else:
+        answer = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return answer
 
 def retrieveInfo(data):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT nombres, apellidos, identificacion FROM users WHERE id = %s', (data,)) 
-    info = cursor.fetchone()
-    close(cursor, conn)
-    return info
+    return get_db_connection('SELECT nombres, apellidos, identificacion FROM users WHERE id = %s', (data,), False, True)
 
 def substractInfo(emisores):
     emisores_data = [" ".join(emisores[0][:2])]
@@ -61,13 +61,10 @@ async def validateRequest(request: Request):
 @app.get("/licencia/{code}")
 def getFileData(code: str):
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga, id FROM files WHERE codigo = %s', (code,)) 
-        record = cursor.fetchone()
+        record = get_db_connection('SELECT estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga, id FROM files WHERE codigo = %s', 
+                                   (code,), False, True)
         if record is not None:
-            cursor.execute('SELECT emisor_id, receptor_id FROM follows WHERE file_id = %s', (record[5],)) 
-            files = cursor.fetchall()
+            files = get_db_connection('SELECT emisor_id, receptor_id FROM follows WHERE file_id = %s', (record[5],), False, False) 
             emisores = []
             receptores = []
             for file in files:
@@ -79,25 +76,17 @@ def getFileData(code: str):
                 receptores_data, receptores_cedula = substractInfo(receptores)
                 dataDocument = [record[0], record[1], emisores_data, emisores_cedula,
                         receptores_data, receptores_cedula, record[2], record[3], record[4], record[5]]
-                close(cursor, conn)
                 return {"message": dataDocument}        
     except connector.Error as e:
-        close(cursor, conn)
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
-    close(cursor, conn)
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
 @app.get("/userInfo/{id}")
 async def getUserData(request: Request, id: str):
     if(await validateRequest(request)):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE identificacion = %s', (id,)) 
-        record = cursor.fetchone()
+        record = get_db_connection('SELECT * FROM users WHERE identificacion = %s', (id,), False, True)
         if record:
-            close(cursor, conn)
             return {"message": record}
-        close(cursor, conn)
         return {"message": "Usuario no encontrado"}
     raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
@@ -105,11 +94,7 @@ async def getUserData(request: Request, id: str):
 async def getUsersData(request: Request):
     try:
         if(await validateRequest(request)):
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT nombres, apellidos, identificacion FROM users') 
-            record = cursor.fetchall()
-            close(cursor, conn)
+            record =get_db_connection('SELECT nombres, apellidos, identificacion FROM users', (), False, False)
             return {"users": record}
         raise HTTPException(status_code=404, detail=f"You are being tracked")
     except connector.Error as e:
@@ -123,17 +108,13 @@ async def saveInfoUsuario(request: Request):
         json_data = await validateRequest(request)
         if(not json_data):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(f'SELECT id FROM users WHERE identificacion = {json_data.get('identificacion')} AND nacionalidad = {json_data.get("nacionalidad")}')
-        if (cursor.fetchone() is None):
-            cursor.execute('INSERT INTO users (nombres, apellidos, fechaNacimiento, nacionalidad, identificacion) VALUES (%s, %s, %s, %s, %s)', 
+        record = get_db_connection('SELECT id FROM users WHERE identificacion = %s AND nacionalidad = %s', 
+                                   (json_data.get('identificacion'), json_data.get("nacionalidad")), False, True)
+        if (record is None):
+            get_db_connection('INSERT INTO users (nombres, apellidos, fechaNacimiento, nacionalidad, identificacion) VALUES (%s, %s, %s, %s, %s)', 
                         (json_data.get('nombres'), json_data.get('apellidos'), json_data.get('fechaNacimiento'),
-                            json_data.get('nacionalidad'), json_data.get('identificacion'),))
-            conn.commit()
-            close(cursor, conn)
+                            json_data.get('nacionalidad'), json_data.get('identificacion'),), True, False)
             return {"message": "Usuario guardado exitosamente"}
-        close(cursor, conn)
         raise HTTPException(status_code=403, detail="Usuario ya existe")        
     except connector.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
@@ -146,33 +127,24 @@ async def saveInfoFile(request: Request):
         json_data = await validateRequest(request)
         if (not json_data):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM files WHERE codigo = %s', (json_data.get('code'),))
-        record = cursor.fetchone()
+        record = get_db_connection('SELECT id FROM files WHERE codigo = %s', (json_data.get('code'),), False, True)
         if record is None:
             emisores = json_data.get('emisor').split(',')
             receptores = json_data.get('receptor').split(',')
-            cursor.execute('INSERT INTO files (estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga) VALUES (%s, %s, %s, %s, %s) RETURNING id', 
+            get_db_connection('INSERT INTO files (estado, codigo, fechaEmision, fechaCaducidad, enlaceDescarga) VALUES (%s, %s, %s, %s, %s) RETURNING id', 
                         (json_data.get('estado'), json_data.get('code'), json_data.get('fechaEmision'),
-                            json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'),))
-            id = cursor.fetchone()[0]
+                            json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'),), True, False)
             for e in emisores:
-                cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (e.strip(), ))
-                emisor = cursor.fetchone()
+                emisor = get_db_connection('SELECT id FROM users WHERE identificacion = %s', (e.strip(), ), False, True)
                 if emisor is None:
                     raise HTTPException(status_code=403, detail=f"Emisor con identificacion {e.strip()} no existe en la base de datos")      
                 for receptor in receptores:
-                    cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ))
-                    receptorId = cursor.fetchone()
+                    receptorId = get_db_connection('SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ), False, True)
                     if receptorId is None:
                         raise HTTPException(status_code=403, detail=f"Receptor con identificacion {receptor.strip()} no existe en la base de datos") 
-                    cursor.execute('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)',
-                                   (emisor[0], receptorId[0], id,))            
-            conn.commit()
-            close(cursor, conn)
+                    get_db_connection('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)',
+                                   (emisor[0], receptorId[0], id,), True, False)            
             return {"message": "Archivo guardado exitosamente"}
-        close(cursor, conn)
         raise HTTPException(status_code=403, detail="Archivo ya existe")
     except connector.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
@@ -185,34 +157,26 @@ async def updateInfoFile(request: Request, id: str):
         json_data = await validateRequest(request)
         if (not json_data):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(f'SELECT id FROM files WHERE id = %s', (id, )) 
-        if cursor.fetchone() is not None:       
+        file = get_db_connection('SELECT id FROM files WHERE id = %s', (id, ), False, True) 
+        if file is not None:       
             emisores = json_data.get('emisor').split(',')
             receptores = json_data.get('receptor').split(',')
-            cursor.execute('DELETE FROM follows WHERE file_id = %s', (id,))
-            cursor.execute("""UPDATE files SET estado = %s, codigo = %s, fechaEmision = %s, 
+            get_db_connection('DELETE FROM follows WHERE file_id = %s', (id,), True, False)
+            get_db_connection("""UPDATE files SET estado = %s, codigo = %s, fechaEmision = %s, 
                            fechaCaducidad = %s, enlaceDescarga = %s WHERE id = %s""", 
                            (json_data.get('estado'), json_data.get('code'), json_data.get('fechaEmision'),
-                            json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'), id, ))
+                            json_data.get('fechaCaducidad'), json_data.get('enlaceDescarga'), id, ), True, False)
             for e in emisores:
-                cursor.execute('SELECT id FROM users WHERE identificacion = %s', (e.strip(), ))
-                emisor = cursor.fetchone()
-                print(emisor)
+                emisor = get_db_connection('SELECT id FROM users WHERE identificacion = %s', (e.strip(), ), False, True)
                 if emisor is None:
                     raise HTTPException(status_code=403, detail=f"Emisor con identificacion {e.strip()} no existe en la base de datos")      
                 for receptor in receptores:
-                    cursor.execute(f'SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ))
-                    receptorId = cursor.fetchone()
+                    receptorId = get_db_connection('SELECT id FROM users WHERE identificacion = %s', (receptor.strip(), ), False, True)
                     if receptorId is None:
                         raise HTTPException(status_code=403, detail=f"Receptor con identificacion {receptor.strip()} no existe en la base de datos") 
-                    cursor.execute('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)',
-                                   (emisor[0], receptorId[0], id,))         
-            conn.commit()
-            close(cursor, conn)
+                    get_db_connection('INSERT INTO follows (emisor_id, receptor_id, file_id) VALUES (%s, %s, %s)', 
+                                      (emisor[0], receptorId[0], id,), True, False)    
             return {"message": "Archivo actualizado exitosamente"}
-        close(cursor, conn)
         raise HTTPException(status_code=403, detail="Archivo no existe")
     except connector.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
@@ -225,19 +189,13 @@ async def updateInfoUsuario(request: Request, id: str):
         json_data = await validateRequest(request)
         if(not json_data):
             raise HTTPException(status_code=404, detail=f"You are being tracked")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM users WHERE id = %s', (id, ))
-        record = cursor.fetchone()
+        record = get_db_connection('SELECT id FROM users WHERE id = %s', (id, ), False, True)
         if (record is not None):
-            cursor.execute("""UPDATE users SET nombres = %s, apellidos = %s, fechaNacimiento = %s, 
+            get_db_connection("""UPDATE users SET nombres = %s, apellidos = %s, fechaNacimiento = %s, 
                            nacionalidad = %s, identificacion = %s WHERE id = %s""", 
                            (json_data.get('nombres'), json_data.get('apellidos'), json_data.get('fechaNacimiento'),
-                            json_data.get('nacionalidad'), json_data.get('identificacion'), id))
-            conn.commit()
-            close(cursor, conn)
+                            json_data.get('nacionalidad'), json_data.get('identificacion'), id), True, False)
             return {"message": "Usuario actualizado exitosamente"}
-        close(cursor, conn)
         raise HTTPException(status_code=403, detail="Usuario no existe")        
     except connector.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
